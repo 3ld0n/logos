@@ -1,0 +1,22 @@
+name: logos_env
+channels:
+  - conda-forge
+  - defaults
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - python=3.10
+  - biopython
+  - chess
+  - ecdsa
+  - matplotlib
+  - mido
+  - networkx
+  - numpy
+  - pandas
+  - pygame
+  - rdkit
+  - scipy
+  - sympy
+  - tqdm
+prefix: /opt/anaconda3/envs/logos_env
