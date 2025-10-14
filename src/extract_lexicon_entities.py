@@ -14,28 +14,87 @@ import pandas as pd
 
 def fetch_places_lexicon():
     """Fetch and parse OpenBible places lexicon."""
-    url = "https://raw.githubusercontent.com/openbibleinfo/Bible-Geocoding-Data/master/ancient.json"
+    url = "https://raw.githubusercontent.com/openbibleinfo/Bible-Geocoding-Data/refs/heads/main/data/ancient.jsonl"
     response = requests.get(url)
+    response.raise_for_status()
+
+    # Parse JSONL: one JSON object per line
+    name_to_best_confidence = {}
+    for raw_line in response.iter_lines(decode_unicode=True):
+        if not raw_line:
+            continue
+        line = raw_line.strip()
+        if not line or line.startswith("//"):
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        # Extract possible names
+        candidate_names = []
+        if isinstance(rec.get("name"), str):
+            candidate_names.append(rec.get("name"))
+        if isinstance(rec.get("names"), list):
+            candidate_names.extend([n for n in rec.get("names") if isinstance(n, str)])
+
+        conf_val = rec.get("confidence") or rec.get("Confidence") or rec.get("score")
+        try:
+            confidence = float(conf_val) if conf_val is not None else 0.0
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        for nm in candidate_names:
+            name = nm.strip()
+            if not name:
+                continue
+            prev = name_to_best_confidence.get(name)
+            if prev is None or confidence > prev:
+                name_to_best_confidence[name] = confidence
+
     places = []
-    for line in response.text.splitlines():
-        print(line)
-        data = json.loads(line)
-        if "name" in data and data.get("confidence", 0) > 0.5:  # Decision: Filter high-confidence
-            places.append({"label": "PLACE", "pattern": [{"LOWER": data["name"].lower()}]})
+    for name, confidence in name_to_best_confidence.items():
+        if confidence > 0.5:  # Decision: Filter high-confidence
+            places.append({"label": "PLACE", "pattern": [{"LOWER": name.lower()}]})
     return places
 
 def fetch_people_lexicon():
     """Fetch and parse BradyStephenson people CSV."""
     url = "https://raw.githubusercontent.com/BradyStephenson/bible-data/master/BibleData-Person.csv"
     df = pd.read_csv(url)
-    people_patterns = [{"label": "PERSON", "pattern": [{"LOWER": name.lower()}]} for name in df['name'].unique()]
+    # Auto-detect a name-like column (handles different header spellings)
+    columns_lower = {str(c).lower(): c for c in df.columns}
+    name_col = None
+    for key in ["name", "person", "label", "title", "displayname", "fullname"]:
+        for lower, original in columns_lower.items():
+            if key in lower:
+                name_col = original
+                break
+        if name_col is not None:
+            break
+    if name_col is None:
+        raise ValueError(f"Could not find a name-like column in people CSV. Columns: {list(df.columns)}")
+
+    names = (
+        df[name_col]
+        .dropna()
+        .astype(str)
+        .map(lambda s: s.strip())
+        .loc[lambda s: s != ""]
+        .unique()
+    )
+    people_patterns = [{"label": "PERSON", "pattern": [{"LOWER": name.lower()}]} for name in names]
     return people_patterns
 
 def integrate_lexicons(nlp, places, people):
     """Add lexicon patterns to EntityRuler."""
-    ruler = EntityRuler(nlp)
+    # spaCy v3+: add by factory name, then configure
+    try:
+        ruler = nlp.add_pipe("entity_ruler", after="ner")
+    except ValueError:
+        # If 'ner' not in pipeline, append at end
+        ruler = nlp.add_pipe("entity_ruler")
     ruler.add_patterns(places + people)
-    nlp.add_pipe(ruler, after="ner")
     return nlp
 
 def load_processed_verses(file_path='processed_verses.json'):
